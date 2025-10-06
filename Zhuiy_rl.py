@@ -63,13 +63,60 @@ class RF:
         action = action_dist.sample()
         return action.item()
     
-    def update(self, transition_dict):
-        states_np = np.stack(transition_dict['states'])  # 将列表中的numpy数组堆叠成一个二维数组
+
+    def update_withoutmask(self, transition_dict):
+        states_np = np.stack(transition_dict['states'])  
         states = torch.from_numpy(states_np).float().to(self.device)
     
         actions_np = np.array(transition_dict['actions'])
         actions = torch.from_numpy(actions_np).long().view(-1, 1).to(self.device)
+
+        rewards_np = np.array(transition_dict['rewards'])
+        rewards = torch.from_numpy(rewards_np).float().view(-1, 1).to(self.device)
+
+        G = 0
+        returns = []
+        for r in reversed(rewards):
+            G = r + self.gamma * G
+            returns.insert(0, G)
+        returns = torch.tensor(returns, dtype=torch.float).view(-1, 1).to(self.device)
+        if len(returns) > 1:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
     
+        self.optimizer.zero_grad()
+        total_loss = 0
+    
+        for i in range(len(returns)):
+            state = states[i].unsqueeze(0)
+            action = actions[i]
+            return_ = returns[i]
+            action_probs = self.policy_net(state)
+            action_probs = torch.clamp(action_probs, min=1e-6, max=1.0)
+            
+            dist = torch.distributions.Categorical(action_probs)
+
+            log_prob = dist.log_prob(action.squeeze(-1))
+            
+            loss = -log_prob * return_.detach()
+            total_loss += loss
+
+        average_loss = total_loss / len(returns)
+
+        average_loss.backward()
+        self.optimizer.step()
+
+        loss_value = average_loss.item()
+        self.loss_log.append(loss_value)
+
+        return loss_value
+
+    def update_withmask(self, transition_dict):
+        states_np = np.stack(transition_dict['states'])  
+        states = torch.from_numpy(states_np).float().to(self.device)
+    
+        actions_np = np.array(transition_dict['actions'])
+        actions = torch.from_numpy(actions_np).long().view(-1, 1).to(self.device)
+
         rewards_np = np.array(transition_dict['rewards'])
         rewards = torch.from_numpy(rewards_np).float().view(-1, 1).to(self.device)
 
@@ -94,7 +141,7 @@ class RF:
             return_ = returns[i]
             action_probs = self.policy_net(state)
             if masks is not None:
-                mask_i = masks[i].unsqueeze(0)
+                mask_i = masks[i]
                 action_probs = action_probs.masked_fill(~mask_i, 0)
                 if action_probs.sum() > 0:
                     action_probs = action_probs / action_probs.sum()
@@ -211,11 +258,11 @@ def train(model):
             'masks': []
         }
         if episode % 50 == 0:
-            #mirror_model = copy.deepcopy(model)
+            mirror_model = copy.deepcopy(model)
             meanlog.append(np.mean(model.log[-20:]))
-        points = game([rl_policy, sample_policy, sample_policy, sample_policy], True, False)
-        model.transition_dict['rewards'][-1] += -points[0] 
-        loss = model.update(model.transition_dict)
+        points = game([rl_policy, mirror_policy, mirror_policy, sample_policy], True, False)
+        model.transition_dict['rewards'][-1] += -points[0]
+        loss = model.update_withoutmask(model.transition_dict)
         model.log.append(model.transition_dict['rewards'][-1])
         print(f'episode: {episode}, last_reward: {model.transition_dict["rewards"][-1]}, loss: {loss}')
 
@@ -242,10 +289,10 @@ def evaluation(model, n=100):
     return [s / n for s in score]
 
 if __name__ == '__main__':
-    model = RF(163, 128, 52, 1e-3, 0.99, 'cuda')
-    mirror_model = copy.deepcopy(model)
-    train_and_save()
+    model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
+    #mirror_model = copy.deepcopy(model)
+    #train_and_save()
     model.load('./data/Zhuiy_rl_model.pth')
     game([rl_policy, sample_policy, sample_policy, sample_policy], True, True)
-    print(evaluation(model, 100))
+    print(evaluation(model, 300))
     
