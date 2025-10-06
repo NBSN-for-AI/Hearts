@@ -38,8 +38,16 @@ class GameState:
     rounds: int = 0
     deck: List[Card] = field(default_factory=list)
     table: List[Tuple[Card, int]] = field(default_factory=list)
+    current_table: List[Tuple[Card, int]] = field(default_factory=list)
+    current_suit: Suit = None
+    hearts_broken: bool = False
+    piggy_pulled: bool = False
+    is_done: bool = False
 
     def reset(self):
+        current_suits = None
+        hearts_broken = False
+        piggy_pulled = False
         self.deck = [Card(suit, rank) for suit in Suit for rank in range(1, 14)]
         random.shuffle(self.deck)
         for player in self.players:
@@ -101,31 +109,47 @@ def available_actions(player: Player, suit: Optional[Suit], is_first_round: bool
                 return non_hearts
             return player.hand
 
-def play_round(state: GameState, first_player: int, policies: List[Callable]) -> int:
+def play_round(state: GameState, first_player: int, policies: List[Callable], training: bool=True) -> int:
+    state.current_table = []
+    state.current_suit = None
     print(f'round {state.rounds}:')
-    for i, player in enumerate(state.players):
-        print(f'player {i} hand:', sorted(player.hand))
+    if training:
+        for i, player in enumerate(state.players):
+            print(f'player {i} hand:', sorted(player.hand))
+    else:
+        print('your hand:', sorted(state.players[0].hand))
     print('current points:', [p.points for p in state.players])
     print()
     table: List[(Card, int)] = []
-    suit = None
     scored = any(p.points > 0 for p in state.players)
     for i in range(4):
         player_idx = (first_player + i) % 4
         player = state.players[player_idx]
         is_first = (state.rounds == 1)
-        print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, suit, is_first, scored))}')
-        actions = available_actions(player, suit, is_first, scored)
+        if training:
+            print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
+        else:
+            if i == 0:
+                print(f'your avilable actions: {sorted(available_actions(player, suit, is_first, scored))}')
+        actions = available_actions(player, state.current_suit, is_first, scored)
         card = policies[player_idx](player, player_info(player, state), actions, i)
+        if not state.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
+            state.piggy_pulled = True
+            state.hearts_broken = True
+        if card.suit == Suit.HEARTS and not state.hearts_broken:
+            state.hearts_broken = True
+        if card not in actions:
+            raise ValueError(f'player {player_idx} played invalid card {card}, available actions: {actions}')
         player.hand.remove(card)
         player.table.append(card)
         table.append((card, player_idx))
         state.table.append((card, player_idx))
+        state.current_table.append((card, player_idx))
         print(f'player {player_idx} plays {card}')
         if i == 0:
-            suit = card.suit
+            state.current_suit = card.suit
     
-    lead_cards = [(c, idx) for c, idx in table if c.suit == suit]
+    lead_cards = [(c, idx) for c, idx in table if c.suit == state.current_suit]
     winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
     value = sum(card_value(c) for c, _ in table)
     state.players[winner_idx].points += value
@@ -144,12 +168,12 @@ def end_game(state: GameState):
                 p.points = 0
     return [p.points for p in state.players]
 
-def game(policies: List[Callable]):
+def game(policies: List[Callable], training:bool=True):
     state = GameState()
     state.reset()
     first_player = state.get_first_player()
     while state.rounds <= 13:
-        first_player = play_round(state, first_player, policies)
+        first_player = play_round(state, first_player, policies, training)
         print('points:', [p.points for p in state.players])
         print('===================================')
     print('final points:', end_game(state))
@@ -157,10 +181,15 @@ def game(policies: List[Callable]):
 
 def player_info(player: Player, state: GameState) -> dict:
     return {
-        "hand": player.hand,
-        "points": player.points,
-        "table": state.table,
-        "round": state.rounds,
+        'hand': player.hand,
+        'points': player.points,
+        'table': state.table,
+        'current_table': state.current_table,
+        'current_suit': state.current_suit,
+        'hearts_broken': state.hearts_broken,
+        'piggy_pulled': state.piggy_pulled,
+        'rounds': state.rounds,
+        'current_order': len(state.current_table)
     }
 
 if __name__ == '__main__':
