@@ -109,28 +109,30 @@ def available_actions(player: Player, suit: Optional[Suit], is_first_round: bool
                 return non_hearts
             return player.hand
 
-def play_round(state: GameState, first_player: int, policies: List[Callable], training: bool=True) -> int:
+def play_round(state: GameState, first_player: int, policies: List[Callable], training: bool=True, display: bool=True) -> int:
     state.current_table = []
     state.current_suit = None
-    print(f'round {state.rounds}:')
-    if training:
-        for i, player in enumerate(state.players):
-            print(f'player {i} hand:', sorted(player.hand))
-    else:
-        print('your hand:', sorted(state.players[0].hand))
-    print('current points:', [p.points for p in state.players])
-    print()
+    if display:
+        print(f'round {state.rounds}:')
+        if training:
+            for i, player in enumerate(state.players):
+                print(f'player {i} hand:', sorted(player.hand))
+        else:
+            print('your hand:', sorted(state.players[0].hand))
+        print('current points:', [p.points for p in state.players])
+        print()
     table: List[(Card, int)] = []
     scored = any(p.points > 0 for p in state.players)
     for i in range(4):
         player_idx = (first_player + i) % 4
         player = state.players[player_idx]
         is_first = (state.rounds == 1)
-        if training:
-            print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
-        else:
-            if i == 0:
-                print(f'your avilable actions: {sorted(available_actions(player, suit, is_first, scored))}')
+        if display:
+            if training:
+                print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
+            else:
+                if i == 0:
+                    print(f'your avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
         actions = available_actions(player, state.current_suit, is_first, scored)
         card = policies[player_idx](player, player_info(player, state), actions, i)
         if not state.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
@@ -145,7 +147,8 @@ def play_round(state: GameState, first_player: int, policies: List[Callable], tr
         table.append((card, player_idx))
         state.table.append((card, player_idx))
         state.current_table.append((card, player_idx))
-        print(f'player {player_idx} plays {card}')
+        if display:
+            print(f'player {player_idx} plays {card}')
         if i == 0:
             state.current_suit = card.suit
     
@@ -154,8 +157,9 @@ def play_round(state: GameState, first_player: int, policies: List[Callable], tr
     value = sum(card_value(c) for c, _ in table)
     state.players[winner_idx].points += value
     state.rounds += 1
-    print(f'player {winner_idx} wins the round and gets {value} points')
-    print('-----------------------------------')
+    if display:
+        print(f'player {winner_idx} wins the round and gets {value} points')
+        print('-----------------------------------')
     return winner_idx
 
 def end_game(state: GameState):
@@ -168,14 +172,15 @@ def end_game(state: GameState):
                 p.points = 0
     return [p.points for p in state.players]
 
-def game(policies: List[Callable], training:bool=True):
+def game(policies: List[Callable], training:bool=True, display:bool=True) -> List[int]:
     state = GameState()
     state.reset()
     first_player = state.get_first_player()
     while state.rounds <= 13:
-        first_player = play_round(state, first_player, policies, training)
-        print('points:', [p.points for p in state.players])
-        print('===================================')
+        first_player = play_round(state, first_player, policies, training, display)
+        if display:
+            print('points:', [p.points for p in state.players])
+            print('===================================')
     print('final points:', end_game(state))
     return [p.points for p in state.players]
 
