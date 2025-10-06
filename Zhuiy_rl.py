@@ -6,14 +6,15 @@ from game import game, Card, Suit
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import copy
 
 
 class Policy_net(nn.Module):
-    def __init__(self, state_dim, hidden_dim, action_dim):
+    def __init__(self, state_dim, hidden_dim, action_dim, device):
         super(Policy_net, self).__init__()
         self.fc1 = nn.Linear(state_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, action_dim)
-
+        self.to(device)
     def forward(self, state):
         return F.softmax(self.fc2(F.relu(self.fc1(state))), dim=-1)
     
@@ -23,8 +24,9 @@ class RF:
     'actions': [],
     'rewards': []
     }
+    log = []
     def __init__(self, state_dim, hidden_dim, action_dim, lr, gamma, device):
-        self.policy_net = Policy_net(state_dim, hidden_dim, action_dim)
+        self.policy_net = Policy_net(state_dim, hidden_dim, action_dim, device)
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=1e-3)
         self.gamma = gamma
         self.device = device
@@ -35,7 +37,7 @@ class RF:
         probs = self.policy_net(state)
         if mask is not None:
             mask = torch.tensor(mask, dtype=torch.bool).to(self.device)
-            probs = probs.masked_fill(~mask, 1e-8)
+            probs = probs.masked_fill(~mask, 0)
             probs = probs / probs.sum()
         action_dist = torch.distributions.Categorical(probs)
         action = action_dist.sample()
@@ -63,12 +65,12 @@ def info_to_tensor(info):
     hand = info['hand']
     hand_tensor = torch.zeros(52)
     for card in hand:
-        index = (card.suit.value) * 13 + card.rank
+        index = (card.suit.value) * 13 + card.rank - 1
         hand_tensor[index] = 1
     points_tensor = torch.tensor([info['points']], dtype=torch.float)
     table_tensor = torch.zeros(52)
     for card, _ in info['table']:
-        index = (card.suit.value) * 13 + card.rank
+        index = (card.suit.value) * 13 + card.rank - 1
         table_tensor[index] = 1
     current_suit_tensor = torch.zeros(4)
     if info['current_suit'] is not None:
@@ -77,7 +79,7 @@ def info_to_tensor(info):
         current_suit_tensor = torch.zeros(4)
     current_table_tensor = torch.zeros(52)
     for card, _ in info['current_table']:
-        index = (card.suit.value) * 13 + card.rank
+        index = (card.suit.value) * 13 + card.rank - 1
         current_table_tensor[index] = 1
     hearts_broken_tensor = torch.tensor([1.0 if info['hearts_broken'] else 0.0], dtype=torch.float)
     piggy_pulled_tensor = torch.tensor([1.0 if info['piggy_pulled'] else 0.0], dtype=torch.float)
@@ -87,46 +89,60 @@ def info_to_tensor(info):
 def actions_to_mask(actions):
     mask = torch.zeros(52, dtype=torch.bool)
     for card in actions:
-        index = (card.suit.value) * 13 + card.rank
+        index = (card.suit.value) * 13 + card.rank - 1
         mask[index] = True
     return mask.numpy()
 
 def actions_to_tensor(actions):
     action_tensor = torch.zeros(52)
     for card in actions:
-        index = (card.suit.value) * 13 + card.rank
+        index = (card.suit.value) * 13 + card.rank - 1 
         action_tensor[index] = 1
     return action_tensor.numpy()
 
 def action_to_card(action):
     suit = action // 13
     rank = action % 13
-    return Card(Suit(suit), rank)
+    return Card(Suit(suit), rank + 1)
 
-model = RF(165, 128, 52, 1e-3, 0.99, 'gpu')
+model = RF(163, 128, 52, 1e-3, 0.99, 'cuda')
 mirror_model = model
 
 def rl_policy(player, player_info, actions, order):
-    action = model.take_action(player_info, actions_to_tensor(actions), actions_to_mask(actions))
+    action = model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
     model.transition_dict['rewards'].append(0)
     model.transition_dict['actions'].append(action)
     model.transition_dict['states'].append(info_to_tensor(player_info))
+    print()
+    print(action)
     return action_to_card(action)
 
 def mirror_policy(player, player_info, actions, order):
-    action = mirror_model.take_action(player_info, actions_to_tensor(actions), actions_to_mask(actions))
+    action = mirror_model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
+    print()
+    print(action)
     return action_to_card(action)
 
 def train(model):
     global mirror_model
     for episode in range(100):
+        print('----------------------------------------------------')
+        print(f'episode: {episode}')
         model.transition_dict = {
             'states': [],
             'actions': [],
             'rewards': []
         }
-        model.transition_dict['rewards'][-1] = game([rl_policy, mirror_policy, mirror_policy, mirror_policy])[0]
+        if episode % 10 == 0:
+            mirror_model = copy.deepcopy(model)
+        model.transition_dict['rewards'][-1] = -game([rl_policy, mirror_policy, mirror_policy, mirror_policy])[0]
         model.update(model.transition_dict)
-        mirror_model = model
-        print(f'episode: {episode}, reward: {model.transition_dict["rewards"][-1]}')
+        print(1888)
+        model.log.append(model.transition_dict['rewards'][-1])
+    print(f'episode: {episode}, reward: {model.transition_dict["rewards"][-1]}')
 
+if __name__ == '__main__':
+    print("Start Training")
+    print('----------------------------------------------------')
+    train(model)
+    print("Training Finished", model.log)
