@@ -1,8 +1,10 @@
 from game import game
 from Zhuiy_sample_policy import sample_policy
+from Zhuiy_rl import rl_policy
 
 def real_player(player, player_info, actions, order):
-    print(f"Your turn. Available actions: {sorted(actions)}")
+    actions = sorted(actions)
+    print(f"Your turn. Available actions: {actions}")
     while True:
         try:
             choice = int(input(f"Choose your action (0-{len(actions)-1}): "))
@@ -14,4 +16,4 @@ def real_player(player, player_info, actions, order):
             print("Please enter a valid number.")
 
 #game([sample_policy, sample_policy, sample_policy, sample_policy])
-game([real_player, sample_policy, sample_policy, sample_policy], False)
+game([real_player, rl_policy, sample_policy, sample_policy], False)

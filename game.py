@@ -130,9 +130,6 @@ def play_round(state: GameState, first_player: int, policies: List[Callable], tr
         if display:
             if training:
                 print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
-            else:
-                if i == 0:
-                    print(f'your avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
         actions = available_actions(player, state.current_suit, is_first, scored)
         card = policies[player_idx](player, player_info(player, state), actions, i)
         if not state.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):

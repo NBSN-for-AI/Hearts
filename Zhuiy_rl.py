@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import copy
 import numpy as np
 import pandas as pd
+import os
 
 from Zhuiy_sample_policy import sample_policy
 
@@ -97,7 +98,7 @@ class RF:
 
             log_prob = dist.log_prob(action.squeeze(-1))
             
-            loss = -log_prob * return_.detach()
+            loss = log_prob * return_.detach()
             total_loss += loss
 
         average_loss = total_loss / len(returns)
@@ -227,9 +228,14 @@ def action_to_card(action):
     rank = action % 13 + 1
     return Card(Suit(suit), rank)
 
+model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
 
 def rl_policy(player, player_info, actions, order):
     global model
+    try:
+        model.load('./data/Zhuiy_rl_model.pth')
+    except FileNotFoundError:
+        pass
     action = model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
     if player_info['points'] > 0:
         model.transition_dict['rewards'].append((0 - player_info['points'])/10)
@@ -248,7 +254,11 @@ def mirror_policy(player, player_info, actions, order):
 
 def train(model):
     global mirror_model, meanlog
-    for episode in range(200):
+    for episode in range(500):
+        if episode > 160:
+            model.lr *= 0.98
+            for param_group in model.optimizer.param_groups:
+                param_group['lr'] = model.lr
         print('----------------------------------------------------')
         print(f'episode: {episode}')
         model.transition_dict = {
@@ -257,7 +267,7 @@ def train(model):
             'rewards': [],
             'masks': []
         }
-        if episode % 50 == 0:
+        if episode < 210 and episode % 50 == 0:
             mirror_model = copy.deepcopy(model)
             meanlog.append(np.mean(model.log[-20:]))
         points = game([rl_policy, mirror_policy, mirror_policy, sample_policy], True, False)
@@ -290,9 +300,13 @@ def evaluation(model, n=100):
 
 if __name__ == '__main__':
     model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
+    try:
+        os.remove('./data/Zhuiy_rl_model.pth')
+    except FileNotFoundError:
+        pass
     #mirror_model = copy.deepcopy(model)
     #train_and_save()
     model.load('./data/Zhuiy_rl_model.pth')
-    game([rl_policy, sample_policy, sample_policy, sample_policy], True, True)
+    #game([rl_policy, sample_policy, sample_policy, sample_policy], True, True)
     print(evaluation(model, 300))
     
