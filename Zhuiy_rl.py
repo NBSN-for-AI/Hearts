@@ -66,9 +66,10 @@ class RF:
     
 
     def update_withoutmask(self, transition_dict):
-        states_np = np.stack(transition_dict['states'])  
+        """Update without mask - NOT RECOMMENDED. Use update_withmask instead."""
+        states_np = np.stack(transition_dict['states'])
         states = torch.from_numpy(states_np).float().to(self.device)
-    
+
         actions_np = np.array(transition_dict['actions'])
         actions = torch.from_numpy(actions_np).long().view(-1, 1).to(self.device)
 
@@ -81,28 +82,26 @@ class RF:
             G = r + self.gamma * G
             returns.insert(0, G)
         returns = torch.tensor(returns, dtype=torch.float).view(-1, 1).to(self.device)
-        if len(returns) > 1:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
-    
+
+        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
         self.optimizer.zero_grad()
         total_loss = 0
-    
+
         for i in range(len(returns)):
             state = states[i].unsqueeze(0)
             action = actions[i]
             return_ = returns[i]
             action_probs = self.policy_net(state)
             action_probs = torch.clamp(action_probs, min=1e-6, max=1.0)
-            
-            dist = torch.distributions.Categorical(action_probs)
 
+            dist = torch.distributions.Categorical(action_probs)
             log_prob = dist.log_prob(action.squeeze(-1))
-            
+
             loss = log_prob * return_.detach()
             total_loss += loss
 
         average_loss = total_loss / len(returns)
-
         average_loss.backward()
         self.optimizer.step()
 
@@ -112,9 +111,9 @@ class RF:
         return loss_value
 
     def update_withmask(self, transition_dict):
-        states_np = np.stack(transition_dict['states'])  
+        states_np = np.stack(transition_dict['states'])
         states = torch.from_numpy(states_np).float().to(self.device)
-    
+
         actions_np = np.array(transition_dict['actions'])
         actions = torch.from_numpy(actions_np).long().view(-1, 1).to(self.device)
 
@@ -123,7 +122,60 @@ class RF:
 
         masks_np = np.stack(transition_dict['masks'])
         masks = torch.from_numpy(masks_np).bool().to(self.device)
+
+        # Compute discounted returns (Monte Carlo)
         G = 0
+        returns = []
+        for r in reversed(rewards):
+            G = r + self.gamma * G
+            returns.insert(0, G)
+        returns = torch.tensor(returns, dtype=torch.float).view(-1, 1).to(self.device)
+
+        # Normalize returns for stability
+        if len(returns) > 1:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+        self.optimizer.zero_grad()
+        total_loss = 0
+
+        for i in range(len(returns)):
+            state = states[i].unsqueeze(0)
+            action = actions[i]
+            return_ = returns[i]
+            mask = masks[i].unsqueeze(0)
+
+            # Get raw policy output
+            action_probs = self.policy_net(state)
+
+            # Apply mask to zero out illegal actions
+            action_probs = action_probs.masked_fill(~mask, 0)
+
+            # Renormalize over legal actions only
+            if action_probs.sum() > 0:
+                action_probs = action_probs / action_probs.sum()
+            else:
+                # Fallback: uniform over legal actions
+                action_probs = mask.float() / mask.float().sum()
+
+            # Clamp for numerical stability
+            action_probs = torch.clamp(action_probs, min=1e-8, max=1.0)
+
+            # Create distribution and compute log probability
+            dist = torch.distributions.Categorical(action_probs)
+            log_prob = dist.log_prob(action.squeeze(-1))
+
+            # REINFORCE loss: negative log probability weighted by return
+            loss = log_prob * return_.detach()
+            total_loss += loss
+
+        average_loss = total_loss / len(returns)
+        average_loss.backward()
+        self.optimizer.step()
+
+        loss_value = average_loss.item()
+        self.loss_log.append(loss_value)
+
+        return loss_value
 
         
     
@@ -191,10 +243,6 @@ model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
 
 def rl_policy(player, player_info, actions, order):
     global model
-    try:
-        model.load('./data/Zhuiy_rl_model.pth')
-    except FileNotFoundError:
-        pass
     action = model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
     if player_info['points'] > 0:
         model.transition_dict['rewards'].append((0 - player_info['points'])/10)
@@ -237,10 +285,8 @@ def train(model):
 
 def train_and_save():
     print("Start Training")
-    print('----------------------------------------------------')
     train(model)
-    print("Training Finished", model.log)
-    print(meanlog)
+    print("Training Finished")
     pd.DataFrame(model.log).to_csv('./data/Zhuiy_rl_log.csv', index=False)
     pd.DataFrame(meanlog).to_csv('./data/Zhuiy_rl_meanlog.csv', index=False)
     pd.DataFrame(model.loss_log).to_csv('./data/Zhuiy_rl_loss.csv', index=False)
@@ -259,13 +305,30 @@ def evaluation(model, n=100):
 
 if __name__ == '__main__':
     model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
-    try:
-        os.remove('./data/Zhuiy_rl_model.pth')
-    except FileNotFoundError:
-        pass
-    #mirror_model = copy.deepcopy(model)
-    #train_and_save()
-    model.load('./data/Zhuiy_rl_model.pth')
-    #game([rl_policy, sample_policy, sample_policy, sample_policy], True, True)
-    print(evaluation(model, 300))
+
+    while True:
+        to_train = input("Train? (y/n): ")
+        if to_train in ['y', 'n']:
+            break
+    
+    while True:
+        to_load = input("Load existing model? (y/n): ")
+        if to_load in ['y', 'n']:
+            break
+    if to_train == 'n':
+        if to_load == 'y':
+            model.load('./data/Zhuiy_rl_model.pth')
+            print(evaluation(model, 500))
+        else:
+            print('kicking you off')
+            exit(0)
+    else:
+        mirror_model = copy.deepcopy(model)
+        if to_load == 'y':
+            model.load('./data/Zhuiy_rl_model.pth')
+            train_and_save()
+            print(evaluation(model, 500))
+        else:
+            train_and_save()
+            print(evaluation(model, 500))
     

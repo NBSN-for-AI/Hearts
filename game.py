@@ -35,14 +35,12 @@ class Player:
 @dataclass
 class GameState:
     players: List[Player] = field(default_factory=lambda: [Player() for _ in range(4)])
-    rounds: int = 0
     deck: List[Card] = field(default_factory=list)
     table: List[Tuple[Card, int]] = field(default_factory=list)
     current_table: List[Tuple[Card, int]] = field(default_factory=list)
     current_suit: Suit = None
     hearts_broken: bool = False
     piggy_pulled: bool = False
-    is_done: bool = False
 
     def reset(self):
         current_suits = None
@@ -85,79 +83,30 @@ def available_actions(player: Player, suit: Optional[Suit], is_first_round: bool
         else:
             suited = [c for c in player.hand if c.suit == suit]
             if suited:
-                return suited
+                return sorted(suited)
             non_hearts = [c for c in player.hand if c.suit != Suit.HEARTS]
             if not scored and non_hearts:
-                return [c for c in non_hearts if not (c.suit == Suit.SPADES and c.rank == 12)] or non_hearts
-            return player.hand
+                return sorted([c for c in non_hearts if not (c.suit == Suit.SPADES and c.rank == 12)] or non_hearts)
+            return sorted(player.hand)
     else:
         if suit is None:
             if not scored:
                 non_hearts = [c for c in player.hand if c.suit != Suit.HEARTS]
                 if non_hearts:
-                    return non_hearts
+                    return sorted(non_hearts)
                 else:
-                    return player.hand
+                    return sorted(player.hand)
             else:
-                return player.hand
+                return sorted(player.hand)
         else:
             suited = [c for c in player.hand if c.suit == suit]
             if suited:
-                return suited
+                return sorted(suited)
             non_hearts = [c for c in player.hand if c.suit != Suit.HEARTS]
             if not scored and non_hearts:
-                return non_hearts
-            return player.hand
-
-def play_round(state: GameState, first_player: int, policies: List[Callable], training: bool=True, display: bool=True) -> int:
-    state.current_table = []
-    state.current_suit = None
-    if display:
-        print(f'round {state.rounds}:')
-        if training:
-            for i, player in enumerate(state.players):
-                print(f'player {i} hand:', sorted(player.hand))
-        else:
-            print('your hand:', sorted(state.players[0].hand))
-        print('current points:', [p.points for p in state.players])
-        print()
-    table: List[(Card, int)] = []
-    scored = any(p.points > 0 for p in state.players)
-    for i in range(4):
-        player_idx = (first_player + i) % 4
-        player = state.players[player_idx]
-        is_first = (state.rounds == 1)
-        if display:
-            if training:
-                print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, state.current_suit, is_first, scored))}')
-        actions = available_actions(player, state.current_suit, is_first, scored)
-        card = policies[player_idx](player, player_info(player, state), actions, i)
-        if not state.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
-            state.piggy_pulled = True
-            state.hearts_broken = True
-        if card.suit == Suit.HEARTS and not state.hearts_broken:
-            state.hearts_broken = True
-        if card not in actions:
-            raise ValueError(f'player {player_idx} played invalid card {card}, available actions: {actions}')
-        player.hand.remove(card)
-        player.table.append(card)
-        table.append((card, player_idx))
-        state.table.append((card, player_idx))
-        state.current_table.append((card, player_idx))
-        if display:
-            print(f'player {player_idx} plays {card}')
-        if i == 0:
-            state.current_suit = card.suit
-    
-    lead_cards = [(c, idx) for c, idx in table if c.suit == state.current_suit]
-    winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
-    value = sum(card_value(c) for c, _ in table)
-    state.players[winner_idx].points += value
-    state.rounds += 1
-    if display:
-        print(f'player {winner_idx} wins the round and gets {value} points')
-        print('-----------------------------------')
-    return winner_idx
+                return sorted(non_hearts)
+            return sorted(player.hand)
+# availavle_actions are sorted
 
 def end_game(state: GameState):
     scores = [p.points for p in state.players]
@@ -169,7 +118,7 @@ def end_game(state: GameState):
                 p.points = 0
     return [p.points for p in state.players]
 
-def game(policies: List[Callable], training:bool=True, display:bool=True) -> List[int]:
+def fight(policies: List[Callable], training:bool=True, display:bool=True) -> List[int]:
     state = GameState()
     state.reset()
     first_player = state.get_first_player()
@@ -180,6 +129,178 @@ def game(policies: List[Callable], training:bool=True, display:bool=True) -> Lis
             print('===================================')
     print('final points:', end_game(state))
     return [p.points for p in state.players]
+
+class game:
+    def __init__(self):
+        self.gamestate = GameState()
+        self.rounds = 0
+
+    def reset(self, trick=False):
+        self.gamestate.reset()
+        if trick:
+            # pull the pig into player_0's hand!
+            for i in range(4):
+                if Card(3, 12) in self.gamestate.players[i].hand:
+                    self.gamestate.players[i].hand.remove(Card(3, 12))
+                    self.gamestate.players[i].hand.append(self.gamestate.players[0].hand.pop())
+                    self.gamestate.players[0].hand.append(Card(3, 12))
+                    break
+                
+    def play_round(self, first_player: int, policies: List[Callable]) -> int:
+        self.gamestate.current_table = []
+        self.current_suit = None
+        print(f'round {self.gamestate.rounds}:')
+        print()
+        for i, player in enumerate(self.gamestate.players):
+            print(f'player {i} hand:', sorted(player.hand))
+        print()
+        print('current points:', [p.points for p in self.gamestate.players])
+        print()
+        table: List[(Card, int)] = []
+        scored = any(p.points > 0 for p in self.gamestate.players)
+        for i in range(4):
+            player_idx = (first_player + i) % 4
+            player = self.gamestate.players[player_idx]
+            is_first = (self.gamestate.rounds == 1)
+            print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, self.gamestate.current_suit, is_first, scored))}')
+            actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
+            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
+                self.gamestate.piggy_pulled = True
+                self.gamestate.hearts_broken = True
+            if card.suit == Suit.HEARTS and not self.gamestate.hearts_broken:
+                self.gamestate.hearts_broken = True
+            if card not in actions:
+                raise ValueError(f'player {player_idx} played invalid card {card}, available actions: {actions}')
+            player.hand.remove(card)
+            player.table.append(card)
+            table.append((card, player_idx))
+            self.gamestate.table.append((card, player_idx))
+            self.gamestate.current_table.append((card, player_idx))
+            print(f'player {player_idx} plays {card}')
+            if i == 0:
+                self.gamestate.current_suit = card.suit
+
+        lead_cards = [(c, idx) for c, idx in table if c.suit == self.gamestate.current_suit]
+        winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
+        value = sum(card_value(c) for c, _ in table)
+        self.gamestate.players[winner_idx].points += value
+        self.gamestate.rounds += 1
+        print(f'player {winner_idx} wins the round and gets {value} points')
+        print('-----------------------------------')
+        print()
+        return winner_idx
+
+    def play_round_training(self, first_player: int, policies: List[Callable]) -> tuple[int, int, Card, List[Card]]:
+        self.gamestate.current_table = []
+        self.gamestate.current_suit = None
+        table: List[(Card, int)] = []
+        scored = any(p.points > 0 for p in self.gamestate.players)
+        for i in range(4):
+            player_idx = (first_player + i) % 4
+            player = self.gamestate.players[player_idx]
+            is_first = (self.gamestate.rounds == 1)
+            actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
+            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            if player_idx == 0:
+                ai_action = card
+            if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
+                self.gamestate.piggy_pulled = True
+                self.gamestate.hearts_broken = True
+            if card.suit == Suit.HEARTS and not self.gamestate.hearts_broken:
+                self.gamestate.hearts_broken = True
+            if card not in actions:
+                raise ValueError(f'player {player_idx} played invalid card {card}, available actions: {actions}')
+            player.hand.remove(card)
+            player.table.append(card)
+            table.append((card, player_idx))
+            self.gamestate.table.append((card, player_idx))
+            self.gamestate.current_table.append((card, player_idx))
+            if i == 0:
+                self.gamestate.current_suit = card.suit
+        
+        lead_cards = [(c, idx) for c, idx in table if c.suit == self.gamestate.current_suit]
+        winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
+        value = sum(card_value(c) for c, _ in table)
+        ai_socre = 0
+        if winner_idx == 0:
+            ai_score = value
+        self.gamestate.players[winner_idx].points += value
+        self.gamestate.rounds += 1
+        return winner_idx, ai_score, ai_action, actions
+
+    def play_round_human_0(self, first_player: int, policies: List[Callable]) -> int:
+        self.gamestate.current_table = []
+        self.gamestate.current_suit = None
+        print(f'round {self.gamestate.rounds}:')
+        print()
+        print('your hand:', sorted(self.gamestate.players[0].hand))
+        print()
+        print('current points:', [p.points for p in self.gamestate.players])
+        print()
+        table: List[(Card, int)] = []
+        scored = any(p.points > 0 for p in self.gamestate.players)
+        for i in range(4):
+            player_idx = (first_player + i) % 4
+            player = self.gamestate.players[player_idx]
+            is_first = (self.gamestate.rounds == 1)
+            actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
+            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
+                self.gamestate.piggy_pulled = True
+                self.gamestate.hearts_broken = True
+            if card.suit == Suit.HEARTS and not self.gamestate.hearts_broken:
+                self.gamestate.hearts_broken = True
+            if card not in actions:
+                raise ValueError(f'player {player_idx} played invalid card {card}, available actions: {actions}')
+            player.hand.remove(card)
+            player.table.append(card)
+            table.append((card, player_idx))
+            self.gamestate.table.append((card, player_idx))
+            self.gamestate.current_table.append((card, player_idx))
+            print(f'player {player_idx} plays {card}')
+            if i == 0:
+                self.gamestate.current_suit = card.suit
+        
+        lead_cards = [(c, idx) for c, idx in table if c.suit == self.gamestate.current_suit]
+        winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
+        value = sum(card_value(c) for c, _ in table)
+        self.gamestate.players[winner_idx].points += value
+        self.gamestate.rounds += 1
+        print(f'player {winner_idx} wins the round and gets {value} points')
+        print('-----------------------------------')
+        print()
+        return winner_idx
+
+    def end_game(self):
+        scores = [p.points for p in self.gamestate.players]
+        if 26 in scores:
+            for p in self.gamestate.players:
+                if p.points != 26:
+                    p.points = 26
+                else:
+                    p.points = 0
+            return [p.points for p in self.gamestate.players], True
+        return scores, False
+    
+    def end_game_error(self, text=None):
+        print(f'error: text')
+        return [p.points for p in self.gamestate.players]
+    
+    def fight(self, policies: List[Callable], training:bool=False, human_0:bool=False, trick=False) -> List[int]:
+        self.reset(self, trick)
+        try:
+            first_player = self.gamestate.get_first_player()
+            if training:
+                ai_score_delta = []
+                ai_actions = []
+                ai_masks = []
+                while self.rounds <= 13:
+                    first_player = self.play_round_training(self.gamestate, first_player, policies)
+                score, shot = self.end_game(self)
+                print('final points:', score)
+                return score, shot, ai_score_delta, ai_actions, ai_masks
+
 
 def player_info(player: Player, state: GameState) -> dict:
     return {
