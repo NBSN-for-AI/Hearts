@@ -2,7 +2,7 @@
 Author: Zhuiy
 '''
 
-from game import game, Card, Suit
+from game import Game, Card, Suit
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,10 +10,64 @@ import copy
 import numpy as np
 import pandas as pd
 import os
+import 
 
 from Zhuiy_sample_policy import sample_policy
 
-meanlog = []
+def info_to_tensor(info) -> np.ndarray:
+    hand_array = np.zeros(52, dtype=np.float32)
+    table_array = np.zeros(52, dtype=np.float32)
+    current_table_array = np.zeros(52, dtype=np.float32)
+    
+    if info['hand']:
+        hand_indices = [(card.suit.value * 13 + card.rank - 1) for card in info['hand']]
+        hand_array[hand_indices] = 1
+    
+    if info['table']:
+        table_indices = [(card.suit.value * 13 + card.rank - 1) for card, _ in info['table']]
+        table_array[table_indices] = 1
+    
+    if info['current_table']:
+        current_table_indices = [(card.suit.value * 13 + card.rank - 1) for card, _ in info['current_table']]
+        current_table_array[current_table_indices] = 1
+    
+    current_suit_array = np.zeros(4, dtype=np.float32)
+    if info['current_suit'] is not None:
+        current_suit_array[info['current_suit'].value] = 1
+    
+    points_array = np.array([info['points']], dtype=np.float32)
+    hearts_broken_array = np.array([1.0 if info['hearts_broken'] else 0.0], dtype=np.float32)
+    piggy_pulled_array = np.array([1.0 if info['piggy_pulled'] else 0.0], dtype=np.float32)
+    
+    state_array = np.concatenate([
+        hand_array, points_array, table_array, 
+        current_suit_array, current_table_array, 
+        hearts_broken_array, piggy_pulled_array
+    ])
+    
+    return state_array
+
+def actions_to_mask(actions) -> np.ndarray:
+    mask_array = np.zeros(52, dtype=np.bool_)
+    if actions:
+        action_indices = [(card.suit.value * 13 + card.rank - 1) for card in actions]
+        mask_array[action_indices] = True
+    return mask_array
+
+def actions_to_tensor(actions) -> np.ndarray:
+    action_array = np.zeros(52, dtype=np.float32)
+    if actions:
+        action_indices = [(card.suit.value * 13 + card.rank - 1) for card in actions]
+        action_array[action_indices] = 1
+    return action_array
+
+def action_to_card(action) -> Card:
+    suit = action // 13
+    rank = action % 13 + 1
+    return Card(Suit(suit), rank)
+
+def card_to_action(card) -> int:
+    return card.suit * 13 + card.rank - 1
 
 class Policy_net(nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim, device):
@@ -27,7 +81,6 @@ class Policy_net(nn.Module):
 class RF:
     def __init__(self, state_dim, hidden_dim, action_dim, lr, gamma, device):
         self.policy_net = Policy_net(state_dim, hidden_dim, action_dim, device)
-        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=1e-3)
         self.gamma = gamma
         self.device = device
         self.lr = lr
@@ -39,8 +92,9 @@ class RF:
             }
         self.log = []
         self.loss_log = []
+        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.lr)
 
-    def take_action(self, state, mask=None):
+    def take_action(self, state, mask=None) -> int:
         if isinstance(state, np.ndarray):
             state = torch.from_numpy(state).float().to(self.device)
         elif not isinstance(state, torch.Tensor):
@@ -62,18 +116,17 @@ class RF:
         
         action_dist = torch.distributions.Categorical(probs)
         action = action_dist.sample()
-        return action.item()
-    
+        return action.item()  
 
-    def update_withoutmask(self, transition_dict):
+    def update_withoutmask(self, ai_score_delta, ai_actions, ai_masks, ai_info):
         """Update without mask - NOT RECOMMENDED. Use update_withmask instead."""
-        states_np = np.stack(transition_dict['states'])
+        states_np = np.stack(ai_info)
         states = torch.from_numpy(states_np).float().to(self.device)
 
-        actions_np = np.array(transition_dict['actions'])
+        actions_np = np.array(ai_actions)
         actions = torch.from_numpy(actions_np).long().view(-1, 1).to(self.device)
 
-        rewards_np = np.array(transition_dict['rewards'])
+        rewards_np = np.array(-ai_score_delta + 1)
         rewards = torch.from_numpy(rewards_np).float().view(-1, 1).to(self.device)
 
         G = 0
@@ -98,10 +151,10 @@ class RF:
             dist = torch.distributions.Categorical(action_probs)
             log_prob = dist.log_prob(action.squeeze(-1))
 
-            loss = log_prob * return_.detach()
+            loss = -log_prob * return_.detach()
             total_loss += loss
 
-        average_loss = total_loss / len(returns)
+        average_loss = total_loss / 13
         average_loss.backward()
         self.optimizer.step()
 
@@ -177,71 +230,33 @@ class RF:
 
         return loss_value
 
-        
-    
     def save(self, path):
         torch.save(self.policy_net.state_dict(), path)
 
     def load(self, path):
         self.policy_net.load_state_dict(torch.load(path))
-
-import numpy as np
-
-def info_to_tensor(info):
-    hand_array = np.zeros(52, dtype=np.float32)
-    table_array = np.zeros(52, dtype=np.float32)
-    current_table_array = np.zeros(52, dtype=np.float32)
     
-    if info['hand']:
-        hand_indices = [(card.suit.value * 13 + card.rank - 1) for card in info['hand']]
-        hand_array[hand_indices] = 1
+    def policy(self, player, player_info, actions, order) -> Card:
+        return action_to_card(self.take_action(self, info_to_tensor(player_info), actions_to_mask(actions)))
     
-    if info['table']:
-        table_indices = [(card.suit.value * 13 + card.rank - 1) for card, _ in info['table']]
-        table_array[table_indices] = 1
-    
-    if info['current_table']:
-        current_table_indices = [(card.suit.value * 13 + card.rank - 1) for card, _ in info['current_table']]
-        current_table_array[current_table_indices] = 1
-    
-    current_suit_array = np.zeros(4, dtype=np.float32)
-    if info['current_suit'] is not None:
-        current_suit_array[info['current_suit'].value] = 1
-    
-    points_array = np.array([info['points']], dtype=np.float32)
-    hearts_broken_array = np.array([1.0 if info['hearts_broken'] else 0.0], dtype=np.float32)
-    piggy_pulled_array = np.array([1.0 if info['piggy_pulled'] else 0.0], dtype=np.float32)
-    
-    state_array = np.concatenate([
-        hand_array, points_array, table_array, 
-        current_suit_array, current_table_array, 
-        hearts_broken_array, piggy_pulled_array
-    ])
-    
-    return state_array
-
-def actions_to_mask(actions):
-    mask_array = np.zeros(52, dtype=np.bool_)
-    if actions:
-        action_indices = [(card.suit.value * 13 + card.rank - 1) for card in actions]
-        mask_array[action_indices] = True
-    return mask_array
-
-def actions_to_tensor(actions):
-    action_array = np.zeros(52, dtype=np.float32)
-    if actions:
-        action_indices = [(card.suit.value * 13 + card.rank - 1) for card in actions]
-        action_array[action_indices] = 1
-    return action_array
-
-def action_to_card(action):
-    suit = action // 13
-    rank = action % 13 + 1
-    return Card(Suit(suit), rank)
+    def train(self, game: Game, oppo_policy, episodes):
+        for i in episodes:
+            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = game.fight([self.policy] + oppo_policy, True, False, False)
+            ai_actions = np.vectorize(card_to_action)(ai_actions)
+            ai_masks = np.vecorize(actions_to_mask)(ai_masks)
+            if shot:
+                if score[0] == 0:
+                    ai_score_delta = np.full(13, -3)
+                else:
+                    ai_score_delta = np.full(13, 2)
+            else:
+                ai_score_delta = np.ndarray(ai_score_delta)
+            ai_info = np.vectorize(info_to_tensor)(ai_info)
+            self.update_withoutmask(ai_score_delta, ai_actions, ai_masks, ai_info)
 
 model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
 
-def rl_policy(player, player_info, actions, order):
+def training_rl_policy(player, player_info, actions, order):
     global model
     action = model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
     if player_info['points'] > 0:
@@ -305,6 +320,7 @@ def evaluation(model, n=100):
 
 if __name__ == '__main__':
     model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
+    Hearts = Game()
 
     while True:
         to_train = input("Train? (y/n): ")

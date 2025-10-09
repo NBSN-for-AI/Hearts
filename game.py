@@ -1,11 +1,11 @@
 '''
-authour : Zhuiy & Copilot
+authour : Zhuiy
 '''
 
 from dataclasses import dataclass, field
 from enum import IntEnum
 import random
-from typing import List, Callable, Optional, Tuple
+from typing import List, Callable, Optional, Tuple, Union
 
 class Suit(IntEnum):
     HEARTS = 0
@@ -61,7 +61,19 @@ class GameState:
             for card in player.hand:
                 if card.suit == Suit.CLUBS and card.rank == 2:
                     return i
-        return 0
+    
+    def player_info(self, player: int) -> dict:
+        return {
+            'hand': self.players[player].hand,
+            'points': self.players[player].points,
+            'table': self.players[player].table,
+            'current_table': self.current_table,
+            'current_suit': self.current_suit,
+            'hearts_broken': self.hearts_broken,
+            'piggy_pulled': self.piggy_pulled,
+            'rounds': self.rounds,
+            'current_order': len(self.current_table)
+        }
 
 def card_value(card: Card) -> int:
     if card.suit == Suit.HEARTS:
@@ -108,32 +120,10 @@ def available_actions(player: Player, suit: Optional[Suit], is_first_round: bool
             return sorted(player.hand)
 # availavle_actions are sorted
 
-def end_game(state: GameState):
-    scores = [p.points for p in state.players]
-    if 26 in scores:
-        for p in state.players:
-            if p.points != 26:
-                p.points = 26
-            else:
-                p.points = 0
-    return [p.points for p in state.players]
-
-def fight(policies: List[Callable], training:bool=True, display:bool=True) -> List[int]:
-    state = GameState()
-    state.reset()
-    first_player = state.get_first_player()
-    while state.rounds <= 13:
-        first_player = play_round(state, first_player, policies, training, display)
-        if display:
-            print('points:', [p.points for p in state.players])
-            print('===================================')
-    print('final points:', end_game(state))
-    return [p.points for p in state.players]
-
-class game:
+class Game:
     def __init__(self):
         self.gamestate = GameState()
-        self.rounds = 0
+        self.rounds = 1
 
     def reset(self, trick=False):
         self.gamestate.reset()
@@ -272,7 +262,7 @@ class game:
         print()
         return winner_idx
 
-    def end_game(self):
+    def end_game(self) -> tuple[List[int], bool]:
         scores = [p.points for p in self.gamestate.players]
         if 26 in scores:
             for p in self.gamestate.players:
@@ -283,39 +273,63 @@ class game:
             return [p.points for p in self.gamestate.players], True
         return scores, False
     
-    def end_game_error(self, text=None):
-        print(f'error: text')
+    def end_game_error(self, text=None) -> List[int]:
+        print(f'error: {text}')
         return [p.points for p in self.gamestate.players]
     
-    def fight(self, policies: List[Callable], training:bool=False, human_0:bool=False, trick=False) -> List[int]:
-        self.reset(self, trick)
+    def get_info(self, player: int) -> dict:
+        return self.gamestate.player_info(player)
+
+    def fight(self, policies: List[Callable], training: bool=False, human_0: bool=False, trick=False) -> Union[List[int], tuple[List[int], bool, List[int], List[Card], List[List[Card]], List[dict]], None]:
+        self.reset(trick)
         try:
             first_player = self.gamestate.get_first_player()
             if training:
                 ai_score_delta = []
                 ai_actions = []
                 ai_masks = []
+                ai_info = []
                 while self.rounds <= 13:
-                    first_player = self.play_round_training(self.gamestate, first_player, policies)
-                score, shot = self.end_game(self)
+                    first_player, a_s_d, a_a, a_m = self.play_round_training(first_player, policies)
+                    ai_score_delta.append(a_s_d)
+                    ai_actions.append(a_a)
+                    ai_masks.append(a_m)
+                    ai_info.append(self.get_info(0))
+                    self.rounds += 1
+                score, shot = self.end_game()
                 print('final points:', score)
-                return score, shot, ai_score_delta, ai_actions, ai_masks
-
-
-def player_info(player: Player, state: GameState) -> dict:
-    return {
-        'hand': player.hand,
-        'points': player.points,
-        'table': state.table,
-        'current_table': state.current_table,
-        'current_suit': state.current_suit,
-        'hearts_broken': state.hearts_broken,
-        'piggy_pulled': state.piggy_pulled,
-        'rounds': state.rounds,
-        'current_order': len(state.current_table)
-    }
+                if shot:
+                    print('shooting the moon!!')
+                return score, shot, ai_score_delta, ai_actions, ai_masks, ai_info
+            
+            elif human_0:
+                while self.rounds <= 13:
+                    first_player = self.play_round_human_0(first_player, policies)
+                    self.rounds += 1
+                score, shot = self.end_game()
+                print('final points:', score)
+                if shot:
+                    print('shooting the moon!!')
+                return score
+            
+            else:
+                while self.rounds <= 13:
+                    first_player = self.play_round(first_player, policies)
+                    self.rounds += 1
+                score, shot = self.end_game()
+                print('final points:', score)
+                if shot:
+                    print('shooting the moon!!')
+                return score
+            
+        except Exception as e:
+            if not training:
+                print()
+                print('something fishy happend......')
+            self.end_game_error(e)
 
 if __name__ == '__main__':
     def random_policy(player: Player, player_info: Callable, actions: List[Card], order: int) -> Card:
         return random.choice(actions)
-    game([random_policy]*4)
+    Hearts = Game()
+    Hearts.fight([random_policy]*4)
