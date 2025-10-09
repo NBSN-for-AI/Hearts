@@ -123,50 +123,9 @@ class RF:
 
         masks_np = np.stack(transition_dict['masks'])
         masks = torch.from_numpy(masks_np).bool().to(self.device)
-
         G = 0
-        returns = []
-        for r in reversed(rewards):
-            G = r + self.gamma * G
-            returns.insert(0, G)
-        returns = torch.tensor(returns, dtype=torch.float).view(-1, 1).to(self.device)
-        if len(returns) > 1:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
-    
-        self.optimizer.zero_grad()
-        total_loss = 0
-    
-        for i in range(len(returns)):
-            state = states[i].unsqueeze(0)
-            action = actions[i]
-            return_ = returns[i]
-            action_probs = self.policy_net(state)
-            if masks is not None:
-                mask_i = masks[i]
-                action_probs = action_probs.masked_fill(~mask_i, 0)
-                if action_probs.sum() > 0:
-                    action_probs = action_probs / action_probs.sum()
-                else:
-                    action_probs = mask_i.float() / mask_i.float().sum()
-            
-            action_probs = torch.clamp(action_probs, min=1e-6, max=1.0)
-            
-            dist = torch.distributions.Categorical(action_probs)
 
-            log_prob = dist.log_prob(action.squeeze(-1))
-            
-            loss = -log_prob * return_.detach()
-            total_loss += loss
-
-        average_loss = total_loss / len(returns)
-
-        average_loss.backward()
-        self.optimizer.step()
-
-        loss_value = average_loss.item()
-        self.loss_log.append(loss_value)
-
-        return loss_value
+        
     
     def save(self, path):
         torch.save(self.policy_net.state_dict(), path)
