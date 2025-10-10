@@ -142,7 +142,7 @@ class Game:
     def play_round(self, first_player: int, policies: List[Callable]) -> int:
         self.gamestate.current_table = []
         self.current_suit = None
-        print(f'round {self.gamestate.rounds}:')
+        print(f'round {self.rounds}:')
         print()
         for i, player in enumerate(self.gamestate.players):
             print(f'player {i} hand:', sorted(player.hand))
@@ -154,7 +154,7 @@ class Game:
         for i in range(4):
             player_idx = (first_player + i) % 4
             player = self.gamestate.players[player_idx]
-            is_first = (self.gamestate.rounds == 1)
+            is_first = (self.rounds == 1)
             print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, self.gamestate.current_suit, is_first, scored))}')
             actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
             card = policies[player_idx](player, self.get_info(player_idx), actions, i)
@@ -228,7 +228,7 @@ class Game:
     def play_round_human_0(self, first_player: int, policies: List[Callable]) -> int:
         self.gamestate.current_table = []
         self.gamestate.current_suit = None
-        print(f'round {self.gamestate.rounds}:')
+        print(f'round {self.rounds}:')
         print()
         print('your hand:', sorted(self.gamestate.players[0].hand))
         print()
@@ -239,7 +239,7 @@ class Game:
         for i in range(4):
             player_idx = (first_player + i) % 4
             player = self.gamestate.players[player_idx]
-            is_first = (self.gamestate.rounds == 1)
+            is_first = (self.rounds == 1)
             actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
             card = policies[player_idx](player, self.get_info(player_idx), actions, i)
             if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
@@ -292,17 +292,16 @@ class Game:
             ai_masks = []
             ai_info = []
             while self.rounds <= 13:
+                ai_info.append(self.get_info(0))
                 first_player, a_s_d, a_a, a_m = self.play_round_training(first_player, policies)
-                print(first_player, a_s_d, a_a, a_m)
                 ai_score_delta.append(a_s_d)
                 ai_actions.append(a_a)
                 ai_masks.append(a_m)
-                ai_info.append(self.get_info(0))
                 self.rounds += 1
             score, shot = self.end_game()
-            print('final points:', score)
-            if shot:
-                print('shooting the moon!!')
+            #print('final points:', score)
+            #if shot:
+            #    print('shooting the moon!!')
             return score, shot, ai_score_delta, ai_actions, ai_masks, ai_info
         
         elif human_0:

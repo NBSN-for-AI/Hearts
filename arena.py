@@ -1,6 +1,6 @@
-from game import game
-from Zhuiy_sample_policy import sample_policy
-from Zhuiy_rl import rl_policy
+from game import Game
+from Zhuiy_approach.Zhuiy_rl import RF
+from Zhuiy_sample.Zhuiy_sample_policy import sample_policy
 
 def real_player(player, player_info, actions, order):
     actions = sorted(actions)
@@ -15,5 +15,9 @@ def real_player(player, player_info, actions, order):
         except ValueError:
             print("Please enter a valid number.")
 
+Zhuiy = RF(163, 128, 32, 52, 1e-5, 0.99, 'cuda')
+Zhuiy.load('./Zhuiy_approach/data/policy_net')
+
+Hearts = Game()
 #game([sample_policy, sample_policy, sample_policy, sample_policy])
-game([real_player, rl_policy, sample_policy, sample_policy], False)
+Hearts.fight([real_player, Zhuiy.policy, sample_policy, sample_policy], False, True, False)
