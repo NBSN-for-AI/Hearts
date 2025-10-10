@@ -54,26 +54,12 @@ class GameState:
             player.table = []
         for i, card in enumerate(self.deck):
             self.players[i % 4].hand.append(card)
-        self.rounds = 1
 
     def get_first_player(self) -> int:
         for i, player in enumerate(self.players):
             for card in player.hand:
                 if card.suit == Suit.CLUBS and card.rank == 2:
                     return i
-    
-    def player_info(self, player: int) -> dict:
-        return {
-            'hand': self.players[player].hand,
-            'points': self.players[player].points,
-            'table': self.players[player].table,
-            'current_table': self.current_table,
-            'current_suit': self.current_suit,
-            'hearts_broken': self.hearts_broken,
-            'piggy_pulled': self.piggy_pulled,
-            'rounds': self.rounds,
-            'current_order': len(self.current_table)
-        }
 
 def card_value(card: Card) -> int:
     if card.suit == Suit.HEARTS:
@@ -125,8 +111,25 @@ class Game:
         self.gamestate = GameState()
         self.rounds = 1
 
+    def player_info(self, player: int) -> dict:
+        return {
+            'hand': self.gamestate.players[player].hand,
+            'points': self.gamestate.players[player].points,
+            'table': self.gamestate.table,
+            'current_table': self.gamestate.current_table,
+            'current_suit': self.gamestate.current_suit,
+            'hearts_broken': self.gamestate.hearts_broken,
+            'piggy_pulled': self.gamestate.piggy_pulled,
+            'rounds': self.rounds,
+            'current_order': len(self.gamestate.current_table)
+        }
+
+    def get_info(self, player: int) -> dict:
+        return self.player_info(player)
+
     def reset(self, trick=False):
         self.gamestate.reset()
+        self.rounds = 1
         if trick:
             # pull the pig into player_0's hand!
             for i in range(4):
@@ -154,7 +157,7 @@ class Game:
             is_first = (self.gamestate.rounds == 1)
             print(f'player {player_idx}\'s avilable actions: {sorted(available_actions(player, self.gamestate.current_suit, is_first, scored))}')
             actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
-            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            card = policies[player_idx](player, self.get_info(player_idx), actions, i)
             if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
                 self.gamestate.piggy_pulled = True
                 self.gamestate.hearts_broken = True
@@ -175,7 +178,6 @@ class Game:
         winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
         value = sum(card_value(c) for c, _ in table)
         self.gamestate.players[winner_idx].points += value
-        self.gamestate.rounds += 1
         print(f'player {winner_idx} wins the round and gets {value} points')
         print('-----------------------------------')
         print()
@@ -189,11 +191,16 @@ class Game:
         for i in range(4):
             player_idx = (first_player + i) % 4
             player = self.gamestate.players[player_idx]
-            is_first = (self.gamestate.rounds == 1)
+            is_first = (self.rounds == 1)
+
             actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
-            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            if player_idx == 0:
+                ai_actions = actions
+
+            card = policies[player_idx](player, self.get_info(player_idx), actions, i)
             if player_idx == 0:
                 ai_action = card
+            
             if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
                 self.gamestate.piggy_pulled = True
                 self.gamestate.hearts_broken = True
@@ -212,12 +219,11 @@ class Game:
         lead_cards = [(c, idx) for c, idx in table if c.suit == self.gamestate.current_suit]
         winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
         value = sum(card_value(c) for c, _ in table)
-        ai_socre = 0
+        ai_score = 0
         if winner_idx == 0:
             ai_score = value
         self.gamestate.players[winner_idx].points += value
-        self.gamestate.rounds += 1
-        return winner_idx, ai_score, ai_action, actions
+        return winner_idx, ai_score, ai_action, ai_actions
 
     def play_round_human_0(self, first_player: int, policies: List[Callable]) -> int:
         self.gamestate.current_table = []
@@ -235,7 +241,7 @@ class Game:
             player = self.gamestate.players[player_idx]
             is_first = (self.gamestate.rounds == 1)
             actions = available_actions(player, self.gamestate.current_suit, is_first, scored)
-            card = policies[player_idx](player, player_info(player, self.gamestate), actions, i)
+            card = policies[player_idx](player, self.get_info(player_idx), actions, i)
             if not self.gamestate.piggy_pulled and (card.suit == Suit.SPADES and card.rank == 12):
                 self.gamestate.piggy_pulled = True
                 self.gamestate.hearts_broken = True
@@ -256,7 +262,6 @@ class Game:
         winner_card, winner_idx = max(lead_cards, key=lambda x: (x[0].rank - 2) % 13)
         value = sum(card_value(c) for c, _ in table)
         self.gamestate.players[winner_idx].points += value
-        self.gamestate.rounds += 1
         print(f'player {winner_idx} wins the round and gets {value} points')
         print('-----------------------------------')
         print()
@@ -276,57 +281,55 @@ class Game:
     def end_game_error(self, text=None) -> List[int]:
         print(f'error: {text}')
         return [p.points for p in self.gamestate.players]
-    
-    def get_info(self, player: int) -> dict:
-        return self.gamestate.player_info(player)
 
     def fight(self, policies: List[Callable], training: bool=False, human_0: bool=False, trick=False) -> Union[List[int], tuple[List[int], bool, List[int], List[Card], List[List[Card]], List[dict]], None]:
         self.reset(trick)
-        try:
-            first_player = self.gamestate.get_first_player()
-            if training:
-                ai_score_delta = []
-                ai_actions = []
-                ai_masks = []
-                ai_info = []
-                while self.rounds <= 13:
-                    first_player, a_s_d, a_a, a_m = self.play_round_training(first_player, policies)
-                    ai_score_delta.append(a_s_d)
-                    ai_actions.append(a_a)
-                    ai_masks.append(a_m)
-                    ai_info.append(self.get_info(0))
-                    self.rounds += 1
-                score, shot = self.end_game()
-                print('final points:', score)
-                if shot:
-                    print('shooting the moon!!')
-                return score, shot, ai_score_delta, ai_actions, ai_masks, ai_info
+        #try:
+        first_player = self.gamestate.get_first_player()
+        if training:
+            ai_score_delta = []
+            ai_actions = []
+            ai_masks = []
+            ai_info = []
+            while self.rounds <= 13:
+                first_player, a_s_d, a_a, a_m = self.play_round_training(first_player, policies)
+                print(first_player, a_s_d, a_a, a_m)
+                ai_score_delta.append(a_s_d)
+                ai_actions.append(a_a)
+                ai_masks.append(a_m)
+                ai_info.append(self.get_info(0))
+                self.rounds += 1
+            score, shot = self.end_game()
+            print('final points:', score)
+            if shot:
+                print('shooting the moon!!')
+            return score, shot, ai_score_delta, ai_actions, ai_masks, ai_info
+        
+        elif human_0:
+            while self.rounds <= 13:
+                first_player = self.play_round_human_0(first_player, policies)
+                self.rounds += 1
+            score, shot = self.end_game()
+            print('final points:', score)
+            if shot:
+                print('shooting the moon!!')
+            return score
+        
+        else:
+            while self.rounds <= 13:
+                first_player = self.play_round(first_player, policies)
+                self.rounds += 1
+            score, shot = self.end_game()
+            print('final points:', score)
+            if shot:
+                print('shooting the moon!!')
+            return score
             
-            elif human_0:
-                while self.rounds <= 13:
-                    first_player = self.play_round_human_0(first_player, policies)
-                    self.rounds += 1
-                score, shot = self.end_game()
-                print('final points:', score)
-                if shot:
-                    print('shooting the moon!!')
-                return score
-            
-            else:
-                while self.rounds <= 13:
-                    first_player = self.play_round(first_player, policies)
-                    self.rounds += 1
-                score, shot = self.end_game()
-                print('final points:', score)
-                if shot:
-                    print('shooting the moon!!')
-                return score
-            
-        except Exception as e:
+        #except Exception as e:
             if not training:
                 print()
                 print('something fishy happend......')
-            self.end_game_error(e)
+            return self.end_game_error(e)
 
 if __name__ == '__main__':
     def random_policy(player: Player, player_info: Callable, actions: List[Card], order: int) -> Card:

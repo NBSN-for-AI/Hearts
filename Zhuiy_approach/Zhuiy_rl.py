@@ -2,17 +2,24 @@
 Author: Zhuiy
 '''
 
-from game import Game, Card, Suit
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
 import numpy as np
 import pandas as pd
-import os
-import 
+import os, sys
+from tqdm import tqdm
+import time
 
-from Zhuiy_sample_policy import sample_policy
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from game import Game, Card, Suit
+from Zhuiy_sample.Zhuiy_sample_policy import sample_policy
+
+
+def data_save(data, path, name):
+    pd.DataFrame(data).to_csv(path+'/' + name + '.csv', index=False)
 
 def info_to_tensor(info) -> np.ndarray:
     hand_array = np.zeros(52, dtype=np.float32)
@@ -176,7 +183,6 @@ class RF:
         masks_np = np.stack(transition_dict['masks'])
         masks = torch.from_numpy(masks_np).bool().to(self.device)
 
-        # Compute discounted returns (Monte Carlo)
         G = 0
         returns = []
         for r in reversed(rewards):
@@ -184,7 +190,6 @@ class RF:
             returns.insert(0, G)
         returns = torch.tensor(returns, dtype=torch.float).view(-1, 1).to(self.device)
 
-        # Normalize returns for stability
         if len(returns) > 1:
             returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 
@@ -197,27 +202,20 @@ class RF:
             return_ = returns[i]
             mask = masks[i].unsqueeze(0)
 
-            # Get raw policy output
             action_probs = self.policy_net(state)
 
-            # Apply mask to zero out illegal actions
             action_probs = action_probs.masked_fill(~mask, 0)
 
-            # Renormalize over legal actions only
             if action_probs.sum() > 0:
                 action_probs = action_probs / action_probs.sum()
             else:
-                # Fallback: uniform over legal actions
                 action_probs = mask.float() / mask.float().sum()
 
-            # Clamp for numerical stability
-            action_probs = torch.clamp(action_probs, min=1e-8, max=1.0)
+            action_probs = torch.clamp(action_probs, min=1e-6, max=1.0)
 
-            # Create distribution and compute log probability
             dist = torch.distributions.Categorical(action_probs)
             log_prob = dist.log_prob(action.squeeze(-1))
 
-            # REINFORCE loss: negative log probability weighted by return
             loss = log_prob * return_.detach()
             total_loss += loss
 
@@ -237,24 +235,31 @@ class RF:
         self.policy_net.load_state_dict(torch.load(path))
     
     def policy(self, player, player_info, actions, order) -> Card:
-        return action_to_card(self.take_action(self, info_to_tensor(player_info), actions_to_mask(actions)))
+        return action_to_card(self.take_action(info_to_tensor(player_info), actions_to_mask(actions)))
     
     def train(self, game: Game, oppo_policy, episodes):
-        for i in episodes:
-            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = game.fight([self.policy] + oppo_policy, True, False, False)
-            ai_actions = np.vectorize(card_to_action)(ai_actions)
-            ai_masks = np.vecorize(actions_to_mask)(ai_masks)
+        loss = []
+        points = []
+        for i in tqdm(range(episodes)):
+            k = game.fight([self.policy] + oppo_policy, True, False, False)
+            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = k
+            ai_actions = np.array([card_to_action(action) for action in ai_actions])
+            ai_masks = np.array([actions_to_mask(mask) for mask in ai_masks])
             if shot:
                 if score[0] == 0:
                     ai_score_delta = np.full(13, -3)
                 else:
                     ai_score_delta = np.full(13, 2)
             else:
-                ai_score_delta = np.ndarray(ai_score_delta)
-            ai_info = np.vectorize(info_to_tensor)(ai_info)
-            self.update_withoutmask(ai_score_delta, ai_actions, ai_masks, ai_info)
+                ai_score_delta = np.array(ai_score_delta)
+            ai_info = np.array([info_to_tensor(info) for info in ai_info])
+            loss.append(self.update_withoutmask(ai_score_delta, ai_actions, ai_masks, ai_info))
+            points.append(score[0])
+        self.save('./data/policy_net')
+        data_save(loss, './data', 'loss')
+        data_save(points, './data', 'score')
+        print(f'training finished after {episodes} episodes, mean_score: {sum(points)/episodes}, mean_loss: {sum(loss)/episodes}')
 
-model = RF(163, 128, 52, 1e-5, 0.99, 'cuda')
 
 def training_rl_policy(player, player_info, actions, order):
     global model
@@ -272,31 +277,6 @@ def mirror_policy(player, player_info, actions, order):
     global mirror_model
     action = mirror_model.take_action(info_to_tensor(player_info), actions_to_mask(actions))
     return action_to_card(action)
-
-
-def train(model):
-    global mirror_model, meanlog
-    for episode in range(500):
-        if episode > 160:
-            model.lr *= 0.98
-            for param_group in model.optimizer.param_groups:
-                param_group['lr'] = model.lr
-        print('----------------------------------------------------')
-        print(f'episode: {episode}')
-        model.transition_dict = {
-            'states': [],
-            'actions': [],
-            'rewards': [],
-            'masks': []
-        }
-        if episode < 210 and episode % 50 == 0:
-            mirror_model = copy.deepcopy(model)
-            meanlog.append(np.mean(model.log[-20:]))
-        points = game([rl_policy, mirror_policy, mirror_policy, sample_policy], True, False)
-        model.transition_dict['rewards'][-1] += -points[0]
-        loss = model.update_withoutmask(model.transition_dict)
-        model.log.append(model.transition_dict['rewards'][-1])
-        print(f'episode: {episode}, last_reward: {model.transition_dict["rewards"][-1]}, loss: {loss}')
 
 def train_and_save():
     print("Start Training")
@@ -331,20 +311,22 @@ if __name__ == '__main__':
         to_load = input("Load existing model? (y/n): ")
         if to_load in ['y', 'n']:
             break
+    
     if to_train == 'n':
         if to_load == 'y':
             model.load('./data/Zhuiy_rl_model.pth')
             print(evaluation(model, 500))
         else:
             print('kicking you off')
+            time.sleep(2)
             exit(0)
     else:
         mirror_model = copy.deepcopy(model)
         if to_load == 'y':
             model.load('./data/Zhuiy_rl_model.pth')
-            train_and_save()
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 300)
             print(evaluation(model, 500))
         else:
-            train_and_save()
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 300)
             print(evaluation(model, 500))
     
