@@ -11,6 +11,7 @@ import pandas as pd
 import os, sys
 from tqdm import tqdm
 import time
+import random
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 data_path = os.path.dirname(os.path.abspath(__file__)) + '/data'
@@ -98,7 +99,7 @@ class Policy_net(nn.Module):
     
 class RF:
     def __init__(self, state_dim, hidden_dim1, hidden_dim2, action_dim, lr, gamma, device):
-        self.policy_net = Policy_net(state_dim, hidden_dim1, hidden_dim2, action_dim, device)
+        self.training_policy_net = Policy_net(state_dim, hidden_dim1, hidden_dim2, action_dim, device)
         self.value_net = Value_net(state_dim, (hidden_dim1 + hidden_dim2) // 2, device)
         self.gamma = gamma
         self.device = device
@@ -111,8 +112,8 @@ class RF:
             }
         self.log = []
         self.loss_log = []
-        self.p_optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.lr)
-        self.v_optimizer = torch.optim.Adam(self.value_net.parameters(), lr=self.lr)
+        self.p_optimizer = torch.optim.Adam(self.training_policy_net.parameters(), lr=self.lr)
+        self.v_optimizer = torch.optim.Adam(self.value_net.parameters(), lr=self.lr * 100)
         self.action_log_probs = []
 
     def take_action(self, state, mask=None) -> int:
@@ -127,7 +128,7 @@ class RF:
             elif not isinstance(mask, torch.Tensor):
                 mask = torch.tensor(mask, dtype=torch.bool).to(self.device)
     
-        probs = self.policy_net(state)
+        probs = self.training_policy_net(state)
         action_dist_raw = torch.distributions.Categorical(probs)
         if mask is not None:
             probs = probs.masked_fill(~mask, 0)
@@ -207,25 +208,41 @@ class RF:
         return policy_loss.item(), value_loss.item()
     
     def save(self, path1, path2):
-        torch.save(self.policy_net.state_dict(), path1)
+        torch.save(self.training_policy_net.state_dict(), path1)
         torch.save(self.value_net.state_dict(), path2)
 
     def load(self, path1, path2):
-        self.policy_net.load_state_dict(torch.load(path1))
+        self.training_policy_net.load_state_dict(torch.load(path1))
         self.value_net.load_state_dict(torch.load(path2))
+    
+    def training_policy(self, player, player_info, actions, order) -> Card:
+        a, b = self.take_action(info_to_tensor(player_info), actions_to_mask(actions))
+        self.action_log_probs.append(b)
+        return action_to_card(a)
     
     def policy(self, player, player_info, actions, order) -> Card:
         a, b = self.take_action(info_to_tensor(player_info), actions_to_mask(actions))
-        self.action_log_probs.append(b)
         return action_to_card(a)
     
     def train(self, game: Game, oppo_policy, episodes):
         p_loss = []
         v_loss = []
         points = []
-        for i in tqdm(range(episodes)):
+        e_1 = episodes // 4
+        e_2 = episodes - e_1
+        for i in tqdm(range(e_1)):
             self.action_log_probs = []
-            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = game.fight([self.policy] + oppo_policy, True, False, False)
+            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = game.fight([self.training_policy] + oppo_policy, True, False, False)
+            ai_actions = np.array([card_to_action(action) for action in ai_actions])
+            ai_masks = np.array([actions_to_mask(mask) for mask in ai_masks])
+            ai_info = np.array([info_to_tensor(info) for info in ai_info])
+            p, v = self.update(ai_score_delta, ai_actions, self.action_log_probs, ai_info, shot)
+            p_loss.append(p)
+            v_loss.append(v)
+            points.append(score[0])
+        for i in tqdm(range(e_2)):
+            self.action_log_probs = []
+            score, shot, ai_score_delta, ai_actions, ai_masks, ai_info = game.fight([self.training_policy] + [random.choice(oppo_policy + [self.policy]), random.choice(oppo_policy + [self.policy]), random.choice(oppo_policy + [self.policy])], True, False, False)
             ai_actions = np.array([card_to_action(action) for action in ai_actions])
             ai_masks = np.array([actions_to_mask(mask) for mask in ai_masks])
             ai_info = np.array([info_to_tensor(info) for info in ai_info])
@@ -250,7 +267,6 @@ class RF:
 if __name__ == '__main__':
     model = RF(163, 128, 64, 52, 1e-3, 0.99, 'cuda')
     Hearts = Game()
-    print(card_to_action(Card(0, 1)))
 
     while True:
         to_train = input("Train? (y/n): ")
@@ -274,9 +290,9 @@ if __name__ == '__main__':
         mirror_model = copy.deepcopy(model)
         if to_load == 'y':
             model.load(data_path + '/policy_net', data_path + '/value_net')
-            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 200)
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 400)
             model.evaluation(Hearts, [sample_policy, sample_policy, sample_policy], 300)
         else:
-            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 200)
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 400)
             model.evaluation(Hearts, [sample_policy, sample_policy, sample_policy], 300)
     
