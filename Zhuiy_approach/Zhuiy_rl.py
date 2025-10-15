@@ -113,7 +113,10 @@ class RF:
         self.log = []
         self.loss_log = []
         self.p_optimizer = torch.optim.Adam(self.training_policy_net.parameters(), lr=self.lr)
-        self.v_optimizer = torch.optim.Adam(self.value_net.parameters(), lr=self.lr * 100)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.p_optimizer, mode='min', factor=0.98, patience=10, 
+                              verbose=True, threshold=0.0001, threshold_mode='abs',
+                              cooldown=5, min_lr=1e-10)
+        self.v_optimizer = torch.optim.Adam(self.value_net.parameters(), lr=self.lr * 10)
         self.action_log_probs = []
 
     def take_action(self, state, mask=None) -> int:
@@ -265,7 +268,7 @@ class RF:
         print(s / episodes)
 
 if __name__ == '__main__':
-    model = RF(163, 128, 64, 52, 1e-3, 0.99, 'cuda')
+    model = RF(163, 128, 64, 52, 1e-3, 0.98, 'cuda')
     Hearts = Game()
 
     while True:
@@ -290,9 +293,9 @@ if __name__ == '__main__':
         mirror_model = copy.deepcopy(model)
         if to_load == 'y':
             model.load(data_path + '/policy_net', data_path + '/value_net')
-            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 400)
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 350)
             model.evaluation(Hearts, [sample_policy, sample_policy, sample_policy], 300)
         else:
-            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 400)
+            model.train(Hearts, [sample_policy, sample_policy, sample_policy], 350)
             model.evaluation(Hearts, [sample_policy, sample_policy, sample_policy], 300)
     
